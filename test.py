@@ -9,6 +9,7 @@ import torch.optim as optim
 from torch.optim import lr_scheduler
 from torch.autograd import Variable
 import torch.backends.cudnn as cudnn
+from torch.utils.data import DataLoader
 import numpy as np
 import torchvision
 from torchvision import datasets, models, transforms
@@ -26,6 +27,10 @@ try:
     from apex.fp16_utils import *
 except ImportError: # will be 3.x series
     print('This is not an error. If you want to use low precision, i.e., fp16, please install the apex with cuda support (https://github.com/NVIDIA/apex) and update pytorch to 1.0')
+
+
+
+WORKERS = 12
 
 ######################################################################
 # Options
@@ -53,7 +58,7 @@ opt = parser.parse_args()
 config_path = os.path.join('./model',opt.name,'opts.yaml')
 with open(config_path, 'r') as stream:
         config = yaml.load(stream, Loader=yaml.FullLoader) # for the new pyyaml via 'conda install pyyaml'
-opt.fp16 = config['fp16'] 
+opt.fp16 = config['fp16']
 opt.PCB = config['PCB']
 opt.use_dense = config['use_dense']
 opt.use_NAS = config['use_NAS']
@@ -71,8 +76,8 @@ if 'use_hr' in config:
 
 if 'nclasses' in config: # tp compatible with old config files
     opt.nclasses = config['nclasses']
-else: 
-    opt.nclasses = 751 
+else:
+    opt.nclasses = 751
 
 if 'ibn' in config:
     opt.ibn = config['ibn']
@@ -118,10 +123,10 @@ data_transforms = transforms.Compose([
         transforms.Resize((h, w), interpolation=3),
         transforms.ToTensor(),
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-        ############### Ten Crop        
+        ############### Ten Crop
         #transforms.TenCrop(224),
         #transforms.Lambda(lambda crops: torch.stack(
-         #   [transforms.ToTensor()(crop) 
+         #   [transforms.ToTensor()(crop)
           #      for crop in crops]
            # )),
         #transforms.Lambda(lambda crops: torch.stack(
@@ -134,7 +139,7 @@ if opt.PCB:
     data_transforms = transforms.Compose([
         transforms.Resize((384,192), interpolation=3),
         transforms.ToTensor(),
-        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]) 
+        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
     ])
     h, w = 384, 192
 
@@ -142,13 +147,11 @@ if opt.PCB:
 data_dir = test_dir
 
 if opt.multi:
-    image_datasets = {x: datasets.ImageFolder( os.path.join(data_dir,x) ,data_transforms) for x in ['gallery','query','multi-query']}
-    dataloaders = {x: torch.utils.data.DataLoader(image_datasets[x], batch_size=opt.batchsize,
-                                             shuffle=False, num_workers=16) for x in ['gallery','query','multi-query']}
+    image_datasets = {x: datasets.ImageFolder(os.path.join(data_dir, x), data_transforms) for x in ['gallery','query','multi-query']}
+    dataloaders = {x: DataLoader(image_datasets[x], batch_size=opt.batchsize, shuffle=False, num_workers=WORKERS) for x in ['gallery','query','multi-query']}
 else:
-    image_datasets = {x: datasets.ImageFolder( os.path.join(data_dir,x) ,data_transforms) for x in ['gallery','query']}
-    dataloaders = {x: torch.utils.data.DataLoader(image_datasets[x], batch_size=opt.batchsize,
-                                             shuffle=False, num_workers=16) for x in ['gallery','query']}
+    image_datasets = {x: datasets.ImageFolder(os.path.join(data_dir, x), data_transforms) for x in ['gallery','query']}
+    dataloaders = {x: DataLoader(image_datasets[x], batch_size=opt.batchsize, shuffle=False, num_workers=WORKERS) for x in ['gallery','query']}
 class_names = image_datasets['query'].classes
 use_gpu = torch.cuda.is_available()
 
@@ -159,7 +162,7 @@ def load_network(network):
     save_path = os.path.join('./model',name,'net_%s.pth'%opt.which_epoch)
     try:
         network.load_state_dict(torch.load(save_path))
-    except: 
+    except:
         if torch.cuda.get_device_capability()[0]>6 and len(opt.gpu_ids)==1 and int(version[0])>1: # should be >=7
             print("Compiling model...")
             # https://huggingface.co/docs/diffusers/main/en/optimization/torch2.0
@@ -182,7 +185,7 @@ def fliplr(img):
     img_flip = img.index_select(3,inv_idx)
     return img_flip
 
-def extract_feature(model,dataloaders):
+def extract_feature(model, dataloaders):
     #features = torch.FloatTensor()
     # count = 0
     pbar = tqdm()
@@ -215,21 +218,20 @@ def extract_feature(model,dataloaders):
                 if scale != 1:
                     # bicubic is only  available in pytorch>= 1.1
                     input_img = nn.functional.interpolate(input_img, scale_factor=scale, mode='bicubic', align_corners=False)
-                outputs = model(input_img) 
+                outputs = model(input_img)
                 ff += outputs
         # norm feature
         if opt.PCB:
             # feature size (n,2048,6)
             # 1. To treat every part equally, I calculate the norm for every 2048-dim part feature.
             # 2. To keep the cosine score==1, sqrt(6) is added to norm the whole feature (2048*6).
-            fnorm = torch.norm(ff, p=2, dim=1, keepdim=True) * np.sqrt(6) 
+            fnorm = torch.norm(ff, p=2, dim=1, keepdim=True) * np.sqrt(6)
             ff = ff.div(fnorm.expand_as(ff))
             ff = ff.view(ff.size(0), -1)
         else:
             fnorm = torch.norm(ff, p=2, dim=1, keepdim=True)
             ff = ff.div(fnorm.expand_as(ff))
 
-        
         if iter == 0:
             features = torch.FloatTensor( len(dataloaders.dataset), ff.shape[1])
         #features = torch.cat((features,ff.data.cpu()), 0)
@@ -322,7 +324,7 @@ model = fuse_all_conv_bn(model)
 #dummy_forward_input = torch.rand(opt.batchsize, 3, h, w).cuda()
 #model = torch.jit.trace(model, dummy_forward_input)
 
-print(model)
+# print(model)
 # Extract feature
 since = time.time()
 with torch.no_grad():

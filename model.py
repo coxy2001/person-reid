@@ -74,7 +74,7 @@ class ft_net(nn.Module):
 
     def __init__(self, class_num=751, droprate=0.5, stride=2, circle=False, ibn=False, linear_num=512):
         super(ft_net, self).__init__()
-        model_ft = models.resnet50(pretrained=True)
+        model_ft = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V1)
         if ibn==True:
             model_ft = torch.hub.load('XingangPan/IBN-Net', 'resnet50_ibn_a', pretrained=True)
         # avg pooling to global pooling

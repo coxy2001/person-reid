@@ -1,4 +1,5 @@
 import argparse
+import time
 import scipy.io
 import torch
 import numpy as np
@@ -51,8 +52,10 @@ gallery_feature = gallery_feature.cuda()
 #######################################################################
 # sort the images
 def sort_img(qf, ql, qc, gf, gl, gc):
+    print(qf.shape)
     query = qf.view(-1,1)
-    # print(query.shape)
+    print(query.shape)
+    print(gf.shape)
     score = torch.mm(gf,query)
     score = score.squeeze(1).cpu()
     score = score.numpy()
@@ -75,7 +78,12 @@ def sort_img(qf, ql, qc, gf, gl, gc):
     return index
 
 i = opts.query_index
+
+print('Images:', len(gallery_feature))
+since = time.time()
 index = sort_img(query_feature[i],query_label[i],query_cam[i],gallery_feature,gallery_label,gallery_cam)
+time_elapsed = time.time() - since
+print('Sort images in {:.5f}s'.format(time_elapsed % 60))
 
 ########################################################################
 # Visualize the rank result
